@@ -362,10 +362,6 @@ class SwitchRouter(app_manager.RyuApp):
         
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
-        
-        # Ignore LLDP packets
-        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
-            return
             
         # Handle ARP packets
         if eth.ethertype == ether_types.ETH_TYPE_ARP:
