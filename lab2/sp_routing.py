@@ -1,16 +1,13 @@
 """
  Copyright (c) 2025 Computer Networks Group @ UPB
-
  Permission is hereby granted, free of charge, to any person obtaining a copy of
  this software and associated documentation files (the "Software"), to deal in
  the Software without restriction, including without limitation the rights to
  use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
  the Software, and to permit persons to whom the Software is furnished to do so,
  subject to the following conditions:
-
  The above copyright notice and this permission notice shall be included in all
  copies or substantial portions of the Software.
-
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
  FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
@@ -18,77 +15,168 @@
  IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  """
-
-#!/usr/bin/env python3
-
+import heapq
 from ryu.base import app_manager
-from ryu.controller import mac_to_port
 from ryu.controller import ofp_event
-from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
-from ryu.controller.handler import set_ev_cls
+from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3
-from ryu.lib.mac import haddr_to_bin
-from ryu.lib.packet import packet
-from ryu.lib.packet import ipv4
-from ryu.lib.packet import arp
-
-from ryu.topology import event, switches
+from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4
+from ryu.topology import event
 from ryu.topology.api import get_switch, get_link
-from ryu.app.wsgi import ControllerBase
-
-import topo
 
 class SPRouter(app_manager.RyuApp):
-
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(SPRouter, self).__init__(*args, **kwargs)
-        
-        # Initialize the topology with #ports=4
-        self.topo_net = topo.Fattree(4)
-
-
-    # Topology discovery
-    @set_ev_cls(event.EventSwitchEnter)
-    def get_topology_data(self, ev):
-
-        # Switches and links in the network
-        switches = get_switch(self, None)
-        links = get_link(self, None)
-
+        self.switches = {}
+        self.links = {}
+        self.arp_table = {}
+        self.host_location = {}
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-
-        # Install entry-miss flow entry
         match = parser.OFPMatch()
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                          ofproto.OFPCML_NO_BUFFER)]
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
 
-
-    # Add a flow entry to the flow-table
     def add_flow(self, datapath, priority, match, actions):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-
-        # Construct flow_mod message and send it
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                match=match, instructions=inst)
+        mod = parser.OFPFlowMod(datapath=datapath, priority=priority, match=match, instructions=inst)
         datapath.send_msg(mod)
 
+    @set_ev_cls(event.EventSwitchEnter)
+    def get_topology_data(self, ev):
+        """
+        Populate topology data using Ryu's discovery APIs[cite: 34, 35].
+        This event is crucial for learning the switch and link layout[cite: 37].
+        """
+        switch_list = get_switch(self, None)
+        self.switches = {s.dp.id: s.dp for s in switch_list}
+        link_list = get_link(self, None)
+        self.links = {}
+        for link in link_list:
+            src, dst, src_port = link.src.dpid, link.dst.dpid, link.src.port_no
+            if src not in self.links:
+                self.links[src] = {}
+            self.links[src][dst] = src_port
+        self.logger.info("Topology: %d switches, %d links", len(self.switches), len(link_list))
+
+    def _dijkstra(self, src_dpid, dst_dpid):
+        """
+        Standard Dijkstra's algorithm to find the shortest path of switches[cite: 30].
+        """
+        if src_dpid not in self.switches or dst_dpid not in self.switches: return None
+        distances = {dpid: float('inf') for dpid in self.switches}
+        previous = {dpid: None for dpid in self.switches}
+        distances[src_dpid] = 0
+        pq = [(0, src_dpid)]
+        while pq:
+            dist, current_dpid = heapq.heappop(pq)
+            if dist > distances[current_dpid] or current_dpid == dst_dpid:
+                if current_dpid == dst_dpid: break
+                continue
+            for neighbor_dpid in self.links.get(current_dpid, {}):
+                if distances[current_dpid] + 1 < distances[neighbor_dpid]:
+                    distances[neighbor_dpid] = distances[current_dpid] + 1
+                    previous[neighbor_dpid] = current_dpid
+                    heapq.heappush(pq, (distances[neighbor_dpid], neighbor_dpid))
+        path = []
+        curr = dst_dpid
+        while curr is not None:
+            path.insert(0, curr)
+            curr = previous[curr]
+        return path if path and path[0] == src_dpid else None
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         msg = ev.msg
         datapath = msg.datapath
-        dpid = datapath.id
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+        dpid, in_port = datapath.id, msg.match['in_port']
+        pkt = packet.Packet(msg.data)
+        eth = pkt.get_protocol(ethernet.ethernet)
 
-        # TODO: handle new packets at the controller
+        if eth.ethertype == ether_types.ETH_TYPE_LLDP: return
+
+        # --- Smart Host Discovery ---
+        is_from_switch = dpid in self.links and in_port in self.links[dpid].values()
+        if not is_from_switch:
+            src_ip = None
+            arp_pkt = pkt.get_protocol(arp.arp)
+            ipv4_pkt = pkt.get_protocol(ipv4.ipv4)
+            if arp_pkt: src_ip = arp_pkt.src_ip
+            elif ipv4_pkt: src_ip = ipv4_pkt.src
+
+            if src_ip and src_ip != '0.0.0.0':
+                self.arp_table[src_ip] = eth.src
+                if self.host_location.get(src_ip) != (dpid, in_port):
+                    self.logger.info("Host Discovery: %s at switch %d, port %d", src_ip, dpid, in_port)
+                    self.host_location[src_ip] = (dpid, in_port)
+
+        # --- Packet Handling ---
+        arp_pkt_check = pkt.get_protocol(arp.arp)
+        ipv4_pkt_check = pkt.get_protocol(ipv4.ipv4)
+        if arp_pkt_check: self._handle_arp(datapath, pkt, arp_pkt_check, in_port)
+        elif ipv4_pkt_check: self._handle_ipv4(datapath, pkt, ipv4_pkt_check)
+
+    def _handle_arp(self, datapath, pkt, arp_pkt, in_port):
+        if arp_pkt.opcode == arp.ARP_REQUEST:
+            if arp_pkt.dst_ip in self.arp_table:
+                self._send_arp_reply(datapath, arp_pkt.dst_ip, arp_pkt.src_ip, in_port)
+            else:
+                self._flood(datapath, pkt)
+
+    def _handle_ipv4(self, datapath, pkt, ipv4_pkt):
+        dst_ip = ipv4_pkt.dst
+        if dst_ip not in self.host_location:
+            self._flood(datapath, pkt)
+            return
+
+        dst_dpid, _ = self.host_location[dst_ip]
+        path = self._dijkstra(datapath.id, dst_dpid)
+
+        if path:
+            self.logger.info("Path Found: %s", path)
+            # Install flow rules along the path [cite: 42]
+            for i in range(len(path) - 1):
+                out_port = self.links[path[i]][path[i+1]]
+                self._install_path_flow(self.switches[path[i]], dst_ip, out_port)
+            
+            final_dpid, final_port = self.host_location[dst_ip]
+            self._install_path_flow(self.switches[final_dpid], dst_ip, final_port)
+            
+            # Send the packet on its way
+            first_hop_dpid = path[0]
+            if len(path) > 1: out_port = self.links[first_hop_dpid][path[1]]
+            else: out_port = self.host_location[dst_ip][1]
+            self._send_packet(self.switches[first_hop_dpid], out_port, pkt)
+
+    def _install_path_flow(self, datapath, dst_ip, out_port):
+        match = datapath.ofproto_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=dst_ip)
+        actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
+        self.add_flow(datapath, 1, match, actions)
+
+    def _send_packet(self, datapath, port, pkt):
+        ofproto, parser = datapath.ofproto, datapath.ofproto_parser
+        pkt.serialize()
+        actions = [parser.OFPActionOutput(port=port)]
+        out = parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER,
+                                  in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=pkt.data)
+        datapath.send_msg(out)
+
+    def _send_arp_reply(self, datapath, src_ip, dst_ip, out_port):
+        src_mac, dst_mac = self.arp_table[src_ip], self.arp_table[dst_ip]
+        e = ethernet.ethernet(dst=dst_mac, src=src_mac, ethertype=ether_types.ETH_TYPE_ARP)
+        a = arp.arp(opcode=arp.ARP_REPLY, src_mac=src_mac, src_ip=src_ip, dst_mac=dst_mac, dst_ip=dst_ip)
+        p = packet.Packet()
+        p.add_protocol(e)
+        p.add_protocol(a)
+        self._send_packet(datapath, out_port, p)
+
+    def _flood(self, datapath, pkt):
+        self._send_packet(datapath, datapath.ofproto.OFPP_FLOOD, pkt)
