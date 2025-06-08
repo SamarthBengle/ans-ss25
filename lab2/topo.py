@@ -28,7 +28,7 @@ class Node:
 class Fattree:
     def __init__(self, k):
         if k % 2 != 0:
-            raise ValueError("Fat-tree parameter 'k' must be an even number.")
+            raise ValueError("Fat tree  k values must be an even number.")
         
         self.k = k
         self.num_pods = k
@@ -42,15 +42,15 @@ class Fattree:
         self.agg_switches = []
         self.edge_switches = []
         
-        self._generate_topology()
-        self._assign_addresses()
+        self.generate_topology()
+        self.assign_addresses()
 
-    def _generate_topology(self):
-        self._create_switches()
-        self._create_hosts()
-        self._connect_layers()
+    def generate_topology(self):
+        self.create_switches()
+        self.create_hosts()
+        self.connect_layers()
 
-    def _create_switches(self):
+    def create_switches(self):
         # --- DPID ASSIGNMENT MODIFIED TO START FROM 1 ---
         edge_dpid_start = 1
         agg_dpid_start = edge_dpid_start + (self.k * self.num_edge_switches_per_pod)
@@ -74,12 +74,12 @@ class Fattree:
                 agg_switch.dpid = agg_dpid_start + (p * self.num_agg_switches_per_pod) + s
                 self.agg_switches.append(agg_switch)
 
-    def _create_hosts(self):
+    def create_hosts(self):
         total_hosts = self.num_pods * self.num_edge_switches_per_pod * self.num_hosts_per_edge_switch
         for i in range(total_hosts):
             self.hosts.append(Node(f"h{i}", "host"))
 
-    def _connect_layers(self):
+    def connect_layers(self):
         # Connect edge switches to hosts
         for p in range(self.num_pods):
             for e in range(self.num_edge_switches_per_pod):
@@ -102,7 +102,7 @@ class Fattree:
                     core_switch_index = a * self.num_agg_switches_per_pod + c
                     self.agg_switches[agg_switch_index].add_edge(self.core_switches[core_switch_index])
 
-    def _assign_addresses(self):
+    def assign_addresses(self):
         for p in range(self.num_pods):
             for e in range(self.num_edge_switches_per_pod):
                 for h in range(self.num_hosts_per_edge_switch):

@@ -52,10 +52,7 @@ class SPRouter(app_manager.RyuApp):
 
     @set_ev_cls(event.EventSwitchEnter)
     def get_topology_data(self, ev):
-        """
-        Populate topology data using Ryu's discovery APIs[cite: 34, 35].
-        This event is crucial for learning the switch and link layout[cite: 37].
-        """
+
         switch_list = get_switch(self, None)
         self.switches = {s.dp.id: s.dp for s in switch_list}
         link_list = get_link(self, None)
@@ -67,10 +64,8 @@ class SPRouter(app_manager.RyuApp):
             self.links[src][dst] = src_port
         self.logger.info("Topology: %d switches, %d links", len(self.switches), len(link_list))
 
-    def _dijkstra(self, src_dpid, dst_dpid):
-        """
-        Standard Dijkstra's algorithm to find the shortest path of switches[cite: 30].
-        """
+    def dijkstra(self, src_dpid, dst_dpid):
+
         if src_dpid not in self.switches or dst_dpid not in self.switches: return None
         distances = {dpid: float('inf') for dpid in self.switches}
         previous = {dpid: None for dpid in self.switches}
@@ -121,47 +116,47 @@ class SPRouter(app_manager.RyuApp):
         # --- Packet Handling ---
         arp_pkt_check = pkt.get_protocol(arp.arp)
         ipv4_pkt_check = pkt.get_protocol(ipv4.ipv4)
-        if arp_pkt_check: self._handle_arp(datapath, pkt, arp_pkt_check, in_port)
-        elif ipv4_pkt_check: self._handle_ipv4(datapath, pkt, ipv4_pkt_check)
+        if arp_pkt_check: self.handle_arp(datapath, pkt, arp_pkt_check, in_port)
+        elif ipv4_pkt_check: self.handle_ipv4(datapath, pkt, ipv4_pkt_check)
 
-    def _handle_arp(self, datapath, pkt, arp_pkt, in_port):
+    def handle_arp(self, datapath, pkt, arp_pkt, in_port):
         if arp_pkt.opcode == arp.ARP_REQUEST:
             if arp_pkt.dst_ip in self.arp_table:
-                self._send_arp_reply(datapath, arp_pkt.dst_ip, arp_pkt.src_ip, in_port)
+                self.send_arp_reply(datapath, arp_pkt.dst_ip, arp_pkt.src_ip, in_port)
             else:
-                self._flood(datapath, pkt)
+                self.flood(datapath, pkt)
 
-    def _handle_ipv4(self, datapath, pkt, ipv4_pkt):
+    def handle_ipv4(self, datapath, pkt, ipv4_pkt):
         dst_ip = ipv4_pkt.dst
         if dst_ip not in self.host_location:
-            self._flood(datapath, pkt)
+            self.flood(datapath, pkt)
             return
 
         dst_dpid, _ = self.host_location[dst_ip]
-        path = self._dijkstra(datapath.id, dst_dpid)
+        path = self.dijkstra(datapath.id, dst_dpid)
 
         if path:
             self.logger.info("Path Found: %s", path)
             # Install flow rules along the path [cite: 42]
             for i in range(len(path) - 1):
                 out_port = self.links[path[i]][path[i+1]]
-                self._install_path_flow(self.switches[path[i]], dst_ip, out_port)
+                self.install_path_flow(self.switches[path[i]], dst_ip, out_port)
             
             final_dpid, final_port = self.host_location[dst_ip]
-            self._install_path_flow(self.switches[final_dpid], dst_ip, final_port)
+            self.install_path_flow(self.switches[final_dpid], dst_ip, final_port)
             
             # Send the packet on its way
             first_hop_dpid = path[0]
             if len(path) > 1: out_port = self.links[first_hop_dpid][path[1]]
             else: out_port = self.host_location[dst_ip][1]
-            self._send_packet(self.switches[first_hop_dpid], out_port, pkt)
+            self.send_packet(self.switches[first_hop_dpid], out_port, pkt)
 
-    def _install_path_flow(self, datapath, dst_ip, out_port):
+    def install_path_flow(self, datapath, dst_ip, out_port):
         match = datapath.ofproto_parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_dst=dst_ip)
         actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
         self.add_flow(datapath, 1, match, actions)
 
-    def _send_packet(self, datapath, port, pkt):
+    def send_packet(self, datapath, port, pkt):
         ofproto, parser = datapath.ofproto, datapath.ofproto_parser
         pkt.serialize()
         actions = [parser.OFPActionOutput(port=port)]
@@ -169,14 +164,14 @@ class SPRouter(app_manager.RyuApp):
                                   in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=pkt.data)
         datapath.send_msg(out)
 
-    def _send_arp_reply(self, datapath, src_ip, dst_ip, out_port):
+    def send_arp_reply(self, datapath, src_ip, dst_ip, out_port):
         src_mac, dst_mac = self.arp_table[src_ip], self.arp_table[dst_ip]
         e = ethernet.ethernet(dst=dst_mac, src=src_mac, ethertype=ether_types.ETH_TYPE_ARP)
         a = arp.arp(opcode=arp.ARP_REPLY, src_mac=src_mac, src_ip=src_ip, dst_mac=dst_mac, dst_ip=dst_ip)
         p = packet.Packet()
         p.add_protocol(e)
         p.add_protocol(a)
-        self._send_packet(datapath, out_port, p)
+        self.send_packet(datapath, out_port, p)
 
-    def _flood(self, datapath, pkt):
-        self._send_packet(datapath, datapath.ofproto.OFPP_FLOOD, pkt)
+    def flood(self, datapath, pkt):
+        self.send_packet(datapath, datapath.ofproto.OFPP_FLOOD, pkt)

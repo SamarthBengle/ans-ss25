@@ -22,7 +22,6 @@ from mininet.log import setLogLevel, info
 from mininet.cli import CLI
 from mininet.link import TCLink
 from mininet.node import RemoteController
-from mininet.clean import cleanup
 
 class FattreeNet(Topo):
     """
@@ -36,11 +35,11 @@ class FattreeNet(Topo):
         self.host_map = {}
         self.switch_map = {}
         
-        self._create_hosts(ft_topo.get_hosts())
-        self._create_switches(ft_topo.get_all_switches())
-        self._create_links(ft_topo)
+        self.create_hosts(ft_topo.get_hosts())
+        self.create_switches(ft_topo.get_all_switches())
+        self.create_links(ft_topo)
 
-    def _create_hosts(self, hosts):
+    def create_hosts(self, hosts):
         info('*** Adding hosts\n')
         for i, host_node in enumerate(hosts):
             # Use simple naming h1, h2...
@@ -54,7 +53,7 @@ class FattreeNet(Topo):
             self.host_map[host_node.id] = mn_host
             info(f'Added host {host_name} ({host_node.ip})\n')
 
-    def _create_switches(self, switches):
+    def create_switches(self, switches):
         info('*** Adding switches\n')
         for i, switch_node in enumerate(switches):
             # Use simple naming s1, s2... to avoid special characters
@@ -66,7 +65,7 @@ class FattreeNet(Topo):
             self.switch_map[switch_node.id] = mn_switch
             info(f'Added {switch_node.type} switch {switch_name} (dpid: {switch_node.dpid})\n')
 
-    def _create_links(self, ft_topo):
+    def create_links(self, ft_topo):
         info('*** Adding links\n')
         # Connect hosts to edge switches
         for host_node in ft_topo.get_hosts():
@@ -102,8 +101,6 @@ class FattreeNet(Topo):
             info(f'Added link: {mn_node1} <-> {mn_node2}\n')
 
 def run():
-    """Create and run the fat-tree network."""
-    cleanup()
     
     # For a k=4 fat-tree with 16 servers, as specified in the lab [cite: 15]
     k = 4
