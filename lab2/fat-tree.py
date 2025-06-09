@@ -89,20 +89,19 @@ class FattreeNet(Topo):
 
     def add_link_to_mininet(self, node1, node2):
         mn_node1 = self.host_map.get(node1.id) or self.switch_map.get(node1.id)
-        mn_node2 = self.switch_map.get(node2.id) # Hosts only connect to switches
+        mn_node2 = self.switch_map.get(node2.id) 
         
         if mn_node1 and mn_node2:
             self.addLink(
                 mn_node1,
                 mn_node2,
-                bw=15,          # 15 Mbps bandwidth [cite: 20]
-                delay='5ms'     # 5ms latency [cite: 20]
+                bw=15,      
+                delay='5ms'    
             )
             info(f'Added link: {mn_node1} <-> {mn_node2}\n')
 
 def run():
     
-    # For a k=4 fat-tree with 16 servers, as specified in the lab [cite: 15]
     k = 4
     net_topo = FattreeNet(k=k)
     
