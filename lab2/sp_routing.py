@@ -1,13 +1,16 @@
 """
  Copyright (c) 2025 Computer Networks Group @ UPB
+
  Permission is hereby granted, free of charge, to any person obtaining a copy of
  this software and associated documentation files (the "Software"), to deal in
  the Software without restriction, including without limitation the rights to
  use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
  the Software, and to permit persons to whom the Software is furnished to do so,
  subject to the following conditions:
+
  The above copyright notice and this permission notice shall be included in all
  copies or substantial portions of the Software.
+
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
  FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
@@ -15,7 +18,8 @@
  IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  """
-import heapq
+
+#!/usr/bin/env python3
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
@@ -23,6 +27,7 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4
 from ryu.topology import event
 from ryu.topology.api import get_switch, get_link
+import heapq
 
 class SPRouter(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -98,7 +103,6 @@ class SPRouter(app_manager.RyuApp):
 
         if eth.ethertype == ether_types.ETH_TYPE_LLDP: return
 
-        # --- Smart Host Discovery ---
         is_from_switch = dpid in self.links and in_port in self.links[dpid].values()
         if not is_from_switch:
             src_ip = None
@@ -113,7 +117,6 @@ class SPRouter(app_manager.RyuApp):
                     self.logger.info("Host Discovery: %s at switch %d, port %d", src_ip, dpid, in_port)
                     self.host_location[src_ip] = (dpid, in_port)
 
-        # --- Packet Handling ---
         arp_pkt_check = pkt.get_protocol(arp.arp)
         ipv4_pkt_check = pkt.get_protocol(ipv4.ipv4)
         if arp_pkt_check: self.handle_arp(datapath, pkt, arp_pkt_check, in_port)
@@ -137,7 +140,6 @@ class SPRouter(app_manager.RyuApp):
 
         if path:
             self.logger.info("Path Found: %s", path)
-            # Install flow rules along the path [cite: 42]
             for i in range(len(path) - 1):
                 out_port = self.links[path[i]][path[i+1]]
                 self.install_path_flow(self.switches[path[i]], dst_ip, out_port)
@@ -145,7 +147,6 @@ class SPRouter(app_manager.RyuApp):
             final_dpid, final_port = self.host_location[dst_ip]
             self.install_path_flow(self.switches[final_dpid], dst_ip, final_port)
             
-            # Send the packet on its way
             first_hop_dpid = path[0]
             if len(path) > 1: out_port = self.links[first_hop_dpid][path[1]]
             else: out_port = self.host_location[dst_ip][1]

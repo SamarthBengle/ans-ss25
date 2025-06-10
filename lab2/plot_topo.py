@@ -1,4 +1,3 @@
-# plot_topo.py
 import networkx as nx
 import matplotlib.pyplot as plt
 from topo import Fattree
@@ -7,35 +6,34 @@ def plot_fattree(k):
     ft = Fattree(k)
     G = nx.Graph()
 
-    # 1) Add nodes with a "layer" attribute (0=host,1=edge,2=agg,3=core)
-    for sw in ft.switches:
-        if sw.type == 'edge':
-            layer = 1
-        elif sw.type == 'agg':
-            layer = 2
-        else:  # core
-            layer = 3
-        G.add_node(sw.id, layer=layer, ftype=sw.type)
+    for sw in ft.edge_switches:
+        G.add_node(sw.id, layer=1, ftype='edge')
+    
+    for sw in ft.agg_switches:
+        G.add_node(sw.id, layer=2, ftype='agg')
+    
+    for sw in ft.core_switches:
+        G.add_node(sw.id, layer=3, ftype='core')
 
-    for h in ft.servers:
+    for h in ft.hosts:
         G.add_node(h.id, layer=0, ftype='host')
 
-    # 2) Add each fat-tree link exactly once
     seen = set()
-    for node in ft.switches + ft.servers:
+    all_nodes = ft.core_switches + ft.agg_switches + ft.edge_switches + ft.hosts
+    
+    for node in all_nodes:
         for edge in node.edges:
-            if edge in seen:
+            edge_id = tuple(sorted([edge.lnode.id, edge.rnode.id]))
+            if edge_id in seen:
                 continue
-            seen.add(edge)
+            seen.add(edge_id)
             u = edge.lnode.id
             v = edge.rnode.id
             G.add_edge(u, v)
 
-    # 3) Compute a multipartite layout by "layer"
     pos = nx.multipartite_layout(G, subset_key="layer")
 
-    # 4) Draw nodes colored/sized by type
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(12, 8))
     node_colors = []
     node_sizes = []
     for n, data in G.nodes(data=True):
@@ -60,7 +58,7 @@ def plot_fattree(k):
         labels={n: n for n in G.nodes()},
         node_color=node_colors,
         node_size=node_sizes,
-        font_size=7,
+        font_size=6,
         font_color='black',
         linewidths=0.5,
         edge_color='gray'
@@ -69,9 +67,21 @@ def plot_fattree(k):
     plt.title(f"Fat-tree (k={k})", fontsize=14)
     plt.axis('off')
 
-    # 5) Save using bbox_inches='tight' instead of tight_layout()
-    plt.savefig('fattree_k4.jpg', format='jpg', dpi=300, bbox_inches='tight')
+    filename = f'fattree_k{k}.jpg'
+    plt.savefig(filename, format='jpg', dpi=300, bbox_inches='tight')
+    print(f"Saved plot as {filename}")
     plt.close()
 
+def plot_multiple_k_values(k_values):
+    """Plot fat-tree topologies for multiple k values"""
+    for k in k_values:
+        if k % 2 != 0:
+            print(f"Skipping k={k} (must be even)")
+            continue
+        print(f"Plotting fat-tree for k={k}...")
+        plot_fattree(k)
+
 if __name__ == "__main__":
-    plot_fattree(4)
+    # Plot for different k values
+    k_values = [4, 6, 8]
+    plot_multiple_k_values(k_values)
