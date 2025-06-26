@@ -51,7 +51,6 @@ if __name__ == '__main__':
     if len(sys.argv) != 7:
         print("\n Error: Incorrect number of arguments.")
         print("Usage: python3 plot_results.py sp_single tl_single sp_parallel_best tl_parallel_best sp_parallel_worst tl_parallel_worst")
-        print("\nExample: python3 plot_results.py 14.9 14.9 15.1 29.8 15.0 15.2")
         sys.exit(1)
 
     try:

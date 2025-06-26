@@ -40,9 +40,9 @@ class FTRouter(app_manager.RyuApp):
         self.rules_installed = False
         self.host_locations = {} 
         self.last_log_time = {}
-        self.monitor_thread = hub.spawn(self._monitor)
+        self.monitor_thread = hub.spawn(self.monitor)
 
-    def _monitor(self):
+    def monitor(self):
         """Monitor topology and install rules when ready."""
         while not self.rules_installed:
             hub.sleep(4)
@@ -192,7 +192,26 @@ class FTRouter(app_manager.RyuApp):
                     self.logger.info(f"Agg s{dpid}: Inter-pod suffix .{host_id} via core port {core_ports[port_index]}")
 
     def install_edge_rules(self, datapath, dpid, links, parser, pod, index):
-        """Install edge switch rules - suffix matching for inter-pod traffic."""
+        """Install edge switch rules - both prefix for intra-pod and suffix for inter-pod."""
+        
+        for subnet in range(self.k // 2):
+            if subnet != index: 
+                subnet_prefix = f"10.{pod}.{subnet}.0"
+                subnet_mask = "255.255.255.0"
+                
+                target_edge_dpid = 1 + (pod * (self.k // 2) + subnet)
+                
+                for neighbor_dpid, port in links[dpid].items():
+                    neighbor_info = self.get_switch_info(neighbor_dpid)
+                    if neighbor_info[0] == "aggregation":
+                        if target_edge_dpid in links[neighbor_dpid]:
+                            match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
+                                                ipv4_dst=(subnet_prefix, subnet_mask))
+                            actions = [parser.OFPActionOutput(port)]
+                            self.add_flow(datapath, priority=2, match=match, actions=actions)
+                            self.logger.info(f"Edge s{dpid}: Intra-pod route to {subnet_prefix}/24 via agg port {port}")
+                            break
+
         agg_ports = []
         for neighbor_dpid, port in links[dpid].items():
             if self.get_switch_info(neighbor_dpid)[0] == "aggregation":
@@ -200,12 +219,13 @@ class FTRouter(app_manager.RyuApp):
         
         agg_ports.sort()
         
+        # Add suffix rules for inter-pod traffic
         for host_id in range(2, self.k//2 + 2): 
             if agg_ports:
                 port_index = (host_id - 2 + index) % (self.k // 2)
                 if port_index < len(agg_ports):
                     match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
-                                          ipv4_dst=('0.0.0.' + str(host_id), '0.0.0.255'))
+                                        ipv4_dst=('0.0.0.' + str(host_id), '0.0.0.255'))
                     actions = [parser.OFPActionOutput(agg_ports[port_index])]
                     self.add_flow(datapath, priority=1, match=match, actions=actions)
                     self.logger.info(f"Edge s{dpid}: Inter-pod suffix .{host_id} via agg port {agg_ports[port_index]}")
